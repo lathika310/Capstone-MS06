@@ -22,6 +22,7 @@ import {
 import { useBleScanner } from '@/hooks/use-ble-scanner';
 
 const OFFLINE_TIMEOUT_MS = 3000;
+const TARGET_BEACON_UUID = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
 
 const median = (values: number[]) => {
   if (values.length === 0) {
@@ -65,6 +66,7 @@ export default function CollectScreen() {
   );
 
   const { devices, isScanning, resetDevices, startScan, stopScan } = useBleScanner({
+    targetUuid: TARGET_BEACON_UUID,
     onDeviceSeen: (reading) => {
       lastSeenRef.current[reading.id] = reading.lastSeen;
       if (!isCapturing || discardRef.current.has(reading.id)) {
@@ -333,6 +335,7 @@ export default function CollectScreen() {
 
         <View style={styles.card}>
           <Text style={styles.label}>BLE scanning</Text>
+          <Text style={styles.caption}>Filtering UUID: {TARGET_BEACON_UUID}</Text>
           <View style={styles.row}>
             <TouchableOpacity style={styles.button} onPress={startScan} disabled={isScanning}>
               <Text style={styles.buttonText}>{isScanning ? 'Scanning…' : 'Start scan'}</Text>

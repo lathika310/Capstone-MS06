@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Buffer } from 'buffer';
 import { BleManager, type Device } from 'react-native-ble-plx';
 
 export type BleDeviceReading = {
@@ -10,6 +11,45 @@ export type BleDeviceReading = {
 
 type BleScannerOptions = {
   onDeviceSeen?: (device: BleDeviceReading) => void;
+  targetUuid?: string;
+};
+
+const APPLE_IBEACON_PREFIX = '4c000215';
+
+const normalizeUuid = (value: string) => value.trim().toLowerCase();
+
+const hexToUuid = (hex: string) => {
+  const cleanHex = hex.replace(/[^0-9a-f]/gi, '').toLowerCase();
+  if (cleanHex.length < 32) {
+    return null;
+  }
+  const value = cleanHex.slice(0, 32);
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20, 32)}`;
+};
+
+const hasTargetIBeaconUuid = (device: Device, targetUuid: string) => {
+  const normalizedTarget = normalizeUuid(targetUuid);
+
+  const serviceMatch = device.serviceUUIDs?.some((serviceUuid) => {
+    return normalizeUuid(serviceUuid) === normalizedTarget;
+  });
+  if (serviceMatch) {
+    return true;
+  }
+
+  if (!device.manufacturerData) {
+    return false;
+  }
+
+  const manufacturerHex = Buffer.from(device.manufacturerData, 'base64').toString('hex').toLowerCase();
+  const prefixIndex = manufacturerHex.indexOf(APPLE_IBEACON_PREFIX);
+  if (prefixIndex < 0) {
+    return false;
+  }
+
+  const beaconUuidHex = manufacturerHex.slice(prefixIndex + APPLE_IBEACON_PREFIX.length, prefixIndex + APPLE_IBEACON_PREFIX.length + 32);
+  const beaconUuid = hexToUuid(beaconUuidHex);
+  return beaconUuid != null && normalizeUuid(beaconUuid) === normalizedTarget;
 };
 
 export const useBleScanner = (options: BleScannerOptions = {}) => {
@@ -28,6 +68,9 @@ export const useBleScanner = (options: BleScannerOptions = {}) => {
   const handleDevice = useCallback(
     (device: Device) => {
       if (device.rssi == null) {
+        return;
+      }
+      if (optionsRef.current.targetUuid && !hasTargetIBeaconUuid(device, optionsRef.current.targetUuid)) {
         return;
       }
       const reading: BleDeviceReading = {
