@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import React, { createContext, useContext, useMemo, useState } from 'react';
-import { Platform } from 'react-native';
+import { ImageSourcePropType, Platform } from 'react-native';
 
 type FingerprintPoint = {
   id: string;
@@ -32,13 +32,23 @@ type FingerprintSample = {
   readings: FingerprintReading[];
 };
 
+type FloorPlanDefinition = {
+  id: string;
+  title: string;
+  pixelsPerMeter: number;
+  image: ImageSourcePropType;
+};
+
 type FingerprintStore = {
+  floorPlans: FloorPlanDefinition[];
+  selectedFloorPlanId: string;
   floorPlanId: string;
   pixelsPerMeter: number;
   sessionId: string;
   points: FingerprintPoint[];
   selectedPointId: string | null;
   samples: FingerprintSample[];
+  setSelectedFloorPlanId: (id: string) => void;
   setSelectedPointId: (id: string | null) => void;
   addPoint: (point: FingerprintPoint) => void;
   removePoint: (id: string) => void;
@@ -48,8 +58,16 @@ type FingerprintStore = {
   setSessionId: (sessionId: string) => void;
 };
 
-const DEFAULT_FLOOR_PLAN_ID = 'eng-1f';
-const DEFAULT_PIXELS_PER_METER = 8;
+const FLOOR_PLANS: FloorPlanDefinition[] = [
+  {
+    id: 'eng-1f',
+    title: 'Engineering 1st Floor',
+    pixelsPerMeter: 8,
+    image: require('@/assets/images/CampusMapEng1stFloor.png'),
+  },
+];
+
+const DEFAULT_FLOOR_PLAN_ID = FLOOR_PLANS[0].id;
 
 const FingerprintStoreContext = createContext<FingerprintStore | null>(null);
 
@@ -71,6 +89,10 @@ export function FingerprintStoreProvider({ children }: { children: React.ReactNo
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [samples, setSamples] = useState<FingerprintSample[]>([]);
   const [sessionId, setSessionId] = useState(() => `session-${Date.now()}`);
+  const [selectedFloorPlanId, setSelectedFloorPlanId] = useState(DEFAULT_FLOOR_PLAN_ID);
+
+  const selectedFloorPlan =
+    FLOOR_PLANS.find((floorPlan) => floorPlan.id === selectedFloorPlanId) ?? FLOOR_PLANS[0];
 
   const addPoint = (point: FingerprintPoint) => {
     setPoints((current) => [...current, point]);
@@ -96,12 +118,15 @@ export function FingerprintStoreProvider({ children }: { children: React.ReactNo
 
   const store = useMemo(
     () => ({
-      floorPlanId: DEFAULT_FLOOR_PLAN_ID,
-      pixelsPerMeter: DEFAULT_PIXELS_PER_METER,
+      floorPlans: FLOOR_PLANS,
+      selectedFloorPlanId,
+      floorPlanId: selectedFloorPlan.id,
+      pixelsPerMeter: selectedFloorPlan.pixelsPerMeter,
       sessionId,
       points,
       selectedPointId,
       samples,
+      setSelectedFloorPlanId,
       setSelectedPointId,
       addPoint,
       removePoint,
@@ -110,7 +135,7 @@ export function FingerprintStoreProvider({ children }: { children: React.ReactNo
       importSamples,
       setSessionId,
     }),
-    [points, selectedPointId, samples, sessionId]
+    [points, selectedFloorPlan, selectedFloorPlanId, selectedPointId, samples, sessionId]
   );
 
   return <FingerprintStoreContext.Provider value={store}>{children}</FingerprintStoreContext.Provider>;
@@ -124,5 +149,5 @@ export const useFingerprintStore = () => {
   return context;
 };
 
-export type { FingerprintPoint, FingerprintReading, FingerprintSample };
+export type { FingerprintPoint, FingerprintReading, FingerprintSample, FloorPlanDefinition };
 export { createId };

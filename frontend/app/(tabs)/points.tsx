@@ -4,20 +4,36 @@ import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 
 import FloorPlanView from '@/components/floor-plan-view';
 import { createId, type FingerprintPoint, useFingerprintStore } from '@/context/fingerprint-store';
 
-const FLOOR_PLAN_IMAGE = require('@/assets/images/CampusMapEng1stFloor.png');
-
 export default function PointsScreen() {
-  const { addPoint, floorPlanId, pixelsPerMeter, points, selectedPointId, setSelectedPointId, removePoint } =
-    useFingerprintStore();
+  const {
+    addPoint,
+    floorPlanId,
+    floorPlans,
+    pixelsPerMeter,
+    points,
+    selectedFloorPlanId,
+    selectedPointId,
+    setSelectedFloorPlanId,
+    setSelectedPointId,
+    removePoint,
+  } = useFingerprintStore();
   const [label, setLabel] = useState('P1');
 
+  const selectedFloorPlan =
+    floorPlans.find((floorPlan) => floorPlan.id === selectedFloorPlanId) ?? floorPlans[0];
+
+  const pointsForFloorPlan = useMemo(
+    () => points.filter((point) => point.floorPlanId === selectedFloorPlanId),
+    [points, selectedFloorPlanId]
+  );
+
   const selectedPoint = useMemo(
-    () => points.find((point) => point.id === selectedPointId) ?? null,
-    [points, selectedPointId]
+    () => pointsForFloorPlan.find((point) => point.id === selectedPointId) ?? null,
+    [pointsForFloorPlan, selectedPointId]
   );
 
   const handleMapPress = (imageX: number, imageY: number, imageWidth: number, imageHeight: number) => {
-    const nextLabel = label.trim() || `P${points.length + 1}`;
+    const nextLabel = label.trim() || `P${pointsForFloorPlan.length + 1}`;
     const xMeters = Number((imageX / pixelsPerMeter).toFixed(2));
     const yMeters = Number(((imageHeight - imageY) / pixelsPerMeter).toFixed(2));
     const point: FingerprintPoint = {
@@ -30,15 +46,15 @@ export default function PointsScreen() {
       yMeters,
     };
     addPoint(point);
-    setLabel(`P${points.length + 2}`);
+    setLabel(`P${pointsForFloorPlan.length + 2}`);
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.mapCard}>
         <FloorPlanView
-          imageSource={FLOOR_PLAN_IMAGE}
-          points={points}
+          imageSource={selectedFloorPlan.image}
+          points={pointsForFloorPlan}
           activePointId={selectedPointId}
           onPress={handleMapPress}
         />
@@ -46,16 +62,32 @@ export default function PointsScreen() {
 
       <ScrollView contentContainerStyle={styles.panel}>
         <Text style={styles.title}>Point selection</Text>
-        <Text style={styles.subtitle}>Tap the floor plan to create labeled fingerprint points.</Text>
+        <Text style={styles.subtitle}>Choose a floor plan, then tap to create labeled points.</Text>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Floor plan</Text>
+          <View style={styles.roomRow}>
+            {floorPlans.map((floorPlan) => {
+              const active = floorPlan.id === selectedFloorPlanId;
+              return (
+                <TouchableOpacity
+                  key={floorPlan.id}
+                  style={[styles.roomButton, active && styles.roomButtonActive]}
+                  onPress={() => setSelectedFloorPlanId(floorPlan.id)}
+                >
+                  <Text style={[styles.roomButtonText, active && styles.roomButtonTextActive]}>
+                    {floorPlan.title}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <Text style={styles.caption}>Scale: {pixelsPerMeter} px/m</Text>
+        </View>
 
         <View style={styles.row}>
           <Text style={styles.label}>Next label</Text>
-          <TextInput
-            value={label}
-            onChangeText={setLabel}
-            placeholder="P1"
-            style={styles.input}
-          />
+          <TextInput value={label} onChangeText={setLabel} placeholder="P1" style={styles.input} />
         </View>
 
         <View style={styles.card}>
@@ -67,20 +99,16 @@ export default function PointsScreen() {
           ) : (
             <Text style={styles.value}>No point selected yet.</Text>
           )}
-          <Text style={styles.caption}>Pixels-per-meter scale: {pixelsPerMeter}</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>All points ({points.length})</Text>
-          {points.length === 0 ? (
+          <Text style={styles.label}>Points in selected floor plan ({pointsForFloorPlan.length})</Text>
+          {pointsForFloorPlan.length === 0 ? (
             <Text style={styles.value}>Tap the map to add the first point.</Text>
           ) : (
-            points.map((point) => (
+            pointsForFloorPlan.map((point) => (
               <View key={point.id} style={styles.pointRow}>
-                <TouchableOpacity
-                  style={styles.pointButton}
-                  onPress={() => setSelectedPointId(point.id)}
-                >
+                <TouchableOpacity style={styles.pointButton} onPress={() => setSelectedPointId(point.id)}>
                   <Text style={styles.pointText}>
                     {point.label} · x={point.xMeters}m y={point.yMeters}m
                   </Text>
@@ -134,6 +162,31 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+  },
+  roomRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  roomButton: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  roomButtonActive: {
+    borderColor: '#1D4ED8',
+    backgroundColor: '#DBEAFE',
+  },
+  roomButtonText: {
+    color: '#0F172A',
+    fontWeight: '500',
+  },
+  roomButtonTextActive: {
+    color: '#1D4ED8',
+    fontWeight: '700',
   },
   card: {
     backgroundColor: '#FFFFFF',
