@@ -1,0 +1,1334 @@
+From 23b162a4e0f7f31d7fea6781e8643f1425a2a308 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Wed, 4 Feb 2026 22:39:46 +0000
+Subject: [PATCH] Add fingerprint collection tabs and store
+
+---
+ frontend/app/(tabs)/_layout.tsx         |  23 +
+ frontend/app/(tabs)/collect.tsx         | 550 ++++++++++++++++++++++++
+ frontend/app/(tabs)/navigate.tsx        |  91 ++++
+ frontend/app/(tabs)/points.tsx          | 172 ++++++++
+ frontend/app/_layout.tsx                |  13 +-
+ frontend/components/floor-plan-view.tsx | 123 ++++++
+ frontend/components/ui/icon-symbol.tsx  |   3 +
+ frontend/context/fingerprint-store.tsx  | 128 ++++++
+ frontend/hooks/use-ble-scanner.ts       |  83 ++++
+ frontend/package-lock.json              |   3 +
+ frontend/package.json                   |   3 +
+ 11 files changed, 1187 insertions(+), 5 deletions(-)
+ create mode 100644 frontend/app/(tabs)/collect.tsx
+ create mode 100644 frontend/app/(tabs)/navigate.tsx
+ create mode 100644 frontend/app/(tabs)/points.tsx
+ create mode 100644 frontend/components/floor-plan-view.tsx
+ create mode 100644 frontend/context/fingerprint-store.tsx
+ create mode 100644 frontend/hooks/use-ble-scanner.ts
+
+diff --git a/frontend/app/(tabs)/_layout.tsx b/frontend/app/(tabs)/_layout.tsx
+index 44fd0b8..a99731d 100644
+--- a/frontend/app/(tabs)/_layout.tsx
++++ b/frontend/app/(tabs)/_layout.tsx
+@@ -30,6 +30,29 @@ export default function TabLayout() {
+           tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+         }}
+       />
++      <Tabs.Screen
++        name="points"
++        options={{
++          title: 'Points',
++          tabBarIcon: ({ color }) => <IconSymbol size={28} name="mappin.and.ellipse" color={color} />,
++        }}
++      />
++      <Tabs.Screen
++        name="collect"
++        options={{
++          title: 'Collect',
++          tabBarIcon: ({ color }) => (
++            <IconSymbol size={28} name="antenna.radiowaves.left.and.right" color={color} />
++          ),
++        }}
++      />
++      <Tabs.Screen
++        name="navigate"
++        options={{
++          title: 'Navigate',
++          tabBarIcon: ({ color }) => <IconSymbol size={28} name="location.north.fill" color={color} />,
++        }}
++      />
+       <Tabs.Screen
+         name="permissions"
+         options={{
+diff --git a/frontend/app/(tabs)/collect.tsx b/frontend/app/(tabs)/collect.tsx
+new file mode 100644
+index 0000000..65a1c82
+--- /dev/null
++++ b/frontend/app/(tabs)/collect.tsx
+@@ -0,0 +1,550 @@
++import * as DocumentPicker from 'expo-document-picker';
++import * as FileSystem from 'expo-file-system';
++import React, { useEffect, useMemo, useRef, useState } from 'react';
++import {
++  Alert,
++  ScrollView,
++  Share,
++  StyleSheet,
++  Text,
++  TextInput,
++  TouchableOpacity,
++  View,
++} from 'react-native';
++
++import {
++  createId,
++  getDeviceInfo,
++  type FingerprintReading,
++  type FingerprintSample,
++  useFingerprintStore,
++} from '@/context/fingerprint-store';
++import { useBleScanner } from '@/hooks/use-ble-scanner';
++
++const OFFLINE_TIMEOUT_MS = 3000;
++
++const median = (values: number[]) => {
++  if (values.length === 0) {
++    return null;
++  }
++  const sorted = [...values].sort((a, b) => a - b);
++  const mid = Math.floor(sorted.length / 2);
++  if (sorted.length % 2 === 0) {
++    return Math.round((sorted[mid - 1] + sorted[mid]) / 2);
++  }
++  return sorted[mid];
++};
++
++export default function CollectScreen() {
++  const {
++    floorPlanId,
++    sessionId,
++    setSessionId,
++    points,
++    selectedPointId,
++    samples,
++    addSample,
++    clearSamples,
++    importSamples,
++  } = useFingerprintStore();
++  const [captureSeconds, setCaptureSeconds] = useState('8');
++  const [isCapturing, setIsCapturing] = useState(false);
++  const [secondsLeft, setSecondsLeft] = useState(0);
++  const [windowMedians, setWindowMedians] = useState<Record<string, number>>({});
++  const [captureCounts, setCaptureCounts] = useState<Record<string, number>>({});
++  const [discarded, setDiscarded] = useState<Set<string>>(new Set());
++
++  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
++  const samplesRef = useRef<Record<string, number[]>>({});
++  const lastSeenRef = useRef<Record<string, number>>({});
++  const discardRef = useRef<Set<string>>(new Set());
++
++  const activePoint = useMemo(
++    () => points.find((point) => point.id === selectedPointId) ?? null,
++    [points, selectedPointId]
++  );
++
++  const { devices, isScanning, resetDevices, startScan, stopScan } = useBleScanner({
++    onDeviceSeen: (reading) => {
++      lastSeenRef.current[reading.id] = reading.lastSeen;
++      if (!isCapturing || discardRef.current.has(reading.id)) {
++        return;
++      }
++      const bucket = samplesRef.current[reading.id] ?? [];
++      bucket.push(reading.rssi);
++      samplesRef.current[reading.id] = bucket;
++      setCaptureCounts((current) => ({
++        ...current,
++        [reading.id]: bucket.length,
++      }));
++    },
++  });
++
++  const deviceList = useMemo(
++    () => Object.values(devices).sort((a, b) => a.id.localeCompare(b.id)),
++    [devices]
++  );
++
++  useEffect(() => {
++    return () => {
++      if (timerRef.current) {
++        clearInterval(timerRef.current);
++      }
++    };
++  }, []);
++
++  const ensureActivePoint = () => {
++    if (!activePoint) {
++      Alert.alert('Select a point', 'Choose a point on the Points tab before capturing data.');
++      return false;
++    }
++    return true;
++  };
++
++  const startCapture = () => {
++    if (!ensureActivePoint()) {
++      return;
++    }
++    const windowSeconds = Math.max(2, Math.min(30, Number(captureSeconds) || 8));
++    setCaptureSeconds(String(windowSeconds));
++    setIsCapturing(true);
++    setSecondsLeft(windowSeconds);
++    samplesRef.current = {};
++    lastSeenRef.current = {};
++    discardRef.current = new Set();
++    setWindowMedians({});
++    setCaptureCounts({});
++    setDiscarded(new Set());
++
++    if (timerRef.current) {
++      clearInterval(timerRef.current);
++    }
++
++    timerRef.current = setInterval(() => {
++      setSecondsLeft((current) => {
++        if (current <= 1) {
++          finishCapture();
++          return 0;
++        }
++        const now = Date.now();
++        Object.entries(lastSeenRef.current).forEach(([id, lastSeen]) => {
++          if (now - lastSeen > OFFLINE_TIMEOUT_MS) {
++            discardRef.current.add(id);
++          }
++        });
++        setDiscarded(new Set(discardRef.current));
++        return current - 1;
++      });
++    }, 1000);
++  };
++
++  const finishCapture = () => {
++    if (timerRef.current) {
++      clearInterval(timerRef.current);
++      timerRef.current = null;
++    }
++    setIsCapturing(false);
++    const medians: Record<string, number> = {};
++    Object.entries(samplesRef.current).forEach(([id, readings]) => {
++      if (discardRef.current.has(id)) {
++        return;
++      }
++      const med = median(readings);
++      if (med != null) {
++        medians[id] = med;
++      }
++    });
++    setWindowMedians(medians);
++  };
++
++  const stopCapture = () => {
++    if (!isCapturing) {
++      return;
++    }
++    finishCapture();
++  };
++
++  const buildReadings = (entries: Array<[string, number]>): FingerprintReading[] =>
++    entries.map(([deviceId, rssi]) => ({ deviceId, rssi }));
++
++  const saveSample = (mode: string, readings: FingerprintReading[]) => {
++    if (!ensureActivePoint()) {
++      return;
++    }
++    const deviceInfo = getDeviceInfo();
++    const sample: FingerprintSample = {
++      id: createId(),
++      timestamp: new Date().toISOString(),
++      sessionId,
++      floorPlanId,
++      pointId: activePoint!.id,
++      xMeters: activePoint!.xMeters,
++      yMeters: activePoint!.yMeters,
++      deviceModel: deviceInfo.deviceModel,
++      osVersion: deviceInfo.osVersion,
++      appVersion: deviceInfo.appVersion,
++      mode,
++      readings,
++    };
++    addSample(sample);
++  };
++
++  const captureSnapshot = () => {
++    const entries = deviceList.map((device) => [device.id, device.rssi] as [string, number]);
++    if (entries.length === 0) {
++      Alert.alert('No devices', 'Start scanning and wait for BLE devices to appear.');
++      return;
++    }
++    saveSample('live', buildReadings(entries));
++  };
++
++  const saveMedians = () => {
++    const entries = Object.entries(windowMedians);
++    if (entries.length === 0) {
++      Alert.alert('No medians', 'Run a capture window first.');
++      return;
++    }
++    const windowSeconds = Math.max(2, Math.min(30, Number(captureSeconds) || 8));
++    saveSample(`median${windowSeconds}s`, buildReadings(entries));
++  };
++
++  const makeCsv = () => {
++    const header =
++      'timestamp,session_id,floor_plan_id,point_id,x_m,y_m,device_id,rssi,mode,device_model,os_version,app_version';
++    const lines = [header];
++    samples.forEach((sample) => {
++      sample.readings.forEach((reading) => {
++        lines.push(
++          [
++            sample.timestamp,
++            sample.sessionId,
++            sample.floorPlanId,
++            sample.pointId,
++            sample.xMeters,
++            sample.yMeters,
++            reading.deviceId,
++            reading.rssi,
++            sample.mode,
++            sample.deviceModel,
++            sample.osVersion,
++            sample.appVersion,
++          ]
++            .map((value) => String(value).replace(/,/g, '_'))
++            .join(',')
++        );
++      });
++    });
++    return lines.join('\n');
++  };
++
++  const exportFile = async (content: string, extension: string) => {
++    if (!FileSystem.cacheDirectory) {
++      Alert.alert('Export failed', 'File system cache directory is unavailable.');
++      return;
++    }
++    const filename = `fingerprints-${Date.now()}.${extension}`;
++    const uri = `${FileSystem.cacheDirectory}${filename}`;
++    await FileSystem.writeAsStringAsync(uri, content, { encoding: FileSystem.EncodingType.UTF8 });
++    await Share.share({
++      message: `Fingerprint data file: ${uri}`,
++      url: uri,
++      title: 'Fingerprint data',
++    });
++  };
++
++  const exportCsv = async () => {
++    if (samples.length === 0) {
++      Alert.alert('No samples', 'Capture samples before exporting.');
++      return;
++    }
++    await exportFile(makeCsv(), 'csv');
++  };
++
++  const exportJsonl = async () => {
++    if (samples.length === 0) {
++      Alert.alert('No samples', 'Capture samples before exporting.');
++      return;
++    }
++    const payload = samples.map((sample) => JSON.stringify(sample)).join('\n');
++    await exportFile(payload, 'jsonl');
++  };
++
++  const importJsonl = async () => {
++    const result = await DocumentPicker.getDocumentAsync({
++      type: ['application/json', 'text/plain'],
++      copyToCacheDirectory: true,
++    });
++    if (result.canceled || result.assets.length === 0) {
++      return;
++    }
++    const asset = result.assets[0];
++    const contents = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
++    const imported: FingerprintSample[] = [];
++    contents
++      .split('\n')
++      .map((line) => line.trim())
++      .filter(Boolean)
++      .forEach((line) => {
++        try {
++          const parsed = JSON.parse(line) as FingerprintSample;
++          if (parsed && parsed.readings) {
++            imported.push(parsed);
++          }
++        } catch {
++          // ignore invalid lines
++        }
++      });
++    if (imported.length === 0) {
++      Alert.alert('Import failed', 'No valid JSONL samples found.');
++      return;
++    }
++    importSamples(imported);
++  };
++
++  const handleNewSession = () => {
++    setSessionId(`session-${Date.now()}`);
++  };
++
++  return (
++    <View style={styles.container}>
++      <ScrollView contentContainerStyle={styles.content}>
++        <Text style={styles.title}>Fingerprint collection</Text>
++        <Text style={styles.subtitle}>Scan BLE, capture windows, and save fingerprint samples.</Text>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Session</Text>
++          <TextInput value={sessionId} onChangeText={setSessionId} style={styles.input} />
++          <TouchableOpacity style={styles.secondaryButton} onPress={handleNewSession}>
++            <Text style={styles.secondaryButtonText}>Generate new session</Text>
++          </TouchableOpacity>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Active point</Text>
++          {activePoint ? (
++            <Text style={styles.value}>
++              {activePoint.label} · x={activePoint.xMeters}m y={activePoint.yMeters}m
++            </Text>
++          ) : (
++            <Text style={styles.value}>No point selected. Go to the Points tab.</Text>
++          )}
++          <Text style={styles.caption}>Floor plan: {floorPlanId}</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>BLE scanning</Text>
++          <View style={styles.row}>
++            <TouchableOpacity style={styles.button} onPress={startScan} disabled={isScanning}>
++              <Text style={styles.buttonText}>{isScanning ? 'Scanning…' : 'Start scan'}</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={stopScan} disabled={!isScanning}>
++              <Text style={styles.buttonOutlineText}>Stop</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={resetDevices}>
++              <Text style={styles.buttonOutlineText}>Clear</Text>
++            </TouchableOpacity>
++          </View>
++          <Text style={styles.caption}>{deviceList.length} devices seen</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Capture window</Text>
++          <View style={styles.row}>
++            <TextInput
++              value={captureSeconds}
++              onChangeText={setCaptureSeconds}
++              keyboardType="numeric"
++              style={[styles.input, styles.inputSmall]}
++            />
++            <TouchableOpacity style={styles.button} onPress={startCapture} disabled={isCapturing}>
++              <Text style={styles.buttonText}>
++                {isCapturing ? `Capturing ${secondsLeft}s` : 'Start capture'}
++              </Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={stopCapture} disabled={!isCapturing}>
++              <Text style={styles.buttonOutlineText}>Stop</Text>
++            </TouchableOpacity>
++          </View>
++          <Text style={styles.caption}>Offline timeout: {OFFLINE_TIMEOUT_MS / 1000}s</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Data actions</Text>
++          <View style={styles.rowWrap}>
++            <TouchableOpacity style={styles.button} onPress={captureSnapshot}>
++              <Text style={styles.buttonText}>Capture snapshot</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.button} onPress={saveMedians}>
++              <Text style={styles.buttonText}>Save medians</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={exportCsv}>
++              <Text style={styles.buttonOutlineText}>Export CSV</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={exportJsonl}>
++              <Text style={styles.buttonOutlineText}>Export JSONL</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.buttonOutline} onPress={importJsonl}>
++              <Text style={styles.buttonOutlineText}>Import JSONL</Text>
++            </TouchableOpacity>
++            <TouchableOpacity style={styles.clearButton} onPress={clearSamples}>
++              <Text style={styles.clearButtonText}>Clear samples</Text>
++            </TouchableOpacity>
++          </View>
++          <Text style={styles.caption}>Samples stored: {samples.length}</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Live devices</Text>
++          {deviceList.length === 0 ? (
++            <Text style={styles.value}>No devices yet.</Text>
++          ) : (
++            deviceList.map((device) => {
++              const isDiscarded = discarded.has(device.id);
++              const samplesCount = captureCounts[device.id] ?? 0;
++              const med = windowMedians[device.id];
++              return (
++                <View key={device.id} style={styles.deviceRow}>
++                  <View style={styles.deviceInfo}>
++                    <Text style={styles.deviceName}>{device.name || device.id}</Text>
++                    {isDiscarded ? (
++                      <Text style={styles.discarded}>DISCARDED (offline &gt; 3s)</Text>
++                    ) : isCapturing ? (
++                      <Text style={styles.caption}>samples: {samplesCount}</Text>
++                    ) : med != null ? (
++                      <Text style={styles.caption}>median: {med} dBm</Text>
++                    ) : null}
++                  </View>
++                  <Text style={styles.deviceRssi}>{device.rssi} dBm</Text>
++                </View>
++              );
++            })
++          )}
++        </View>
++      </ScrollView>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    backgroundColor: '#F8FAFC',
++  },
++  content: {
++    padding: 16,
++    gap: 16,
++  },
++  title: {
++    fontSize: 20,
++    fontWeight: '700',
++  },
++  subtitle: {
++    color: '#475569',
++  },
++  card: {
++    backgroundColor: '#FFFFFF',
++    borderRadius: 12,
++    padding: 16,
++    borderWidth: 1,
++    borderColor: '#E2E8F0',
++    gap: 8,
++  },
++  label: {
++    fontSize: 12,
++    textTransform: 'uppercase',
++    letterSpacing: 0.6,
++    color: '#64748B',
++  },
++  value: {
++    color: '#0F172A',
++  },
++  caption: {
++    color: '#64748B',
++    fontSize: 12,
++  },
++  row: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    gap: 8,
++    flexWrap: 'wrap',
++  },
++  rowWrap: {
++    flexDirection: 'row',
++    flexWrap: 'wrap',
++    gap: 8,
++  },
++  input: {
++    backgroundColor: '#F8FAFC',
++    borderRadius: 8,
++    paddingHorizontal: 12,
++    paddingVertical: 10,
++    borderWidth: 1,
++    borderColor: '#E2E8F0',
++  },
++  inputSmall: {
++    minWidth: 70,
++    textAlign: 'center',
++  },
++  button: {
++    backgroundColor: '#1D4ED8',
++    paddingVertical: 10,
++    paddingHorizontal: 14,
++    borderRadius: 8,
++  },
++  buttonText: {
++    color: '#FFFFFF',
++    fontWeight: '600',
++  },
++  buttonOutline: {
++    borderWidth: 1,
++    borderColor: '#1D4ED8',
++    borderRadius: 8,
++    paddingVertical: 10,
++    paddingHorizontal: 14,
++  },
++  buttonOutlineText: {
++    color: '#1D4ED8',
++    fontWeight: '600',
++  },
++  secondaryButton: {
++    alignSelf: 'flex-start',
++    marginTop: 8,
++  },
++  secondaryButtonText: {
++    color: '#1D4ED8',
++    fontWeight: '600',
++  },
++  clearButton: {
++    backgroundColor: '#FEE2E2',
++    borderRadius: 8,
++    paddingVertical: 10,
++    paddingHorizontal: 14,
++  },
++  clearButtonText: {
++    color: '#991B1B',
++    fontWeight: '600',
++  },
++  deviceRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingVertical: 8,
++    borderBottomWidth: 1,
++    borderBottomColor: '#F1F5F9',
++  },
++  deviceInfo: {
++    flex: 1,
++    paddingRight: 8,
++  },
++  deviceName: {
++    fontWeight: '600',
++    color: '#0F172A',
++  },
++  deviceRssi: {
++    color: '#0F172A',
++  },
++  discarded: {
++    color: '#B91C1C',
++    fontSize: 12,
++  },
++});
+diff --git a/frontend/app/(tabs)/navigate.tsx b/frontend/app/(tabs)/navigate.tsx
+new file mode 100644
+index 0000000..f2ff6b9
+--- /dev/null
++++ b/frontend/app/(tabs)/navigate.tsx
+@@ -0,0 +1,91 @@
++import React, { useMemo } from 'react';
++import { ScrollView, StyleSheet, Text, View } from 'react-native';
++
++import FloorPlanView from '@/components/floor-plan-view';
++import { useFingerprintStore } from '@/context/fingerprint-store';
++
++const FLOOR_PLAN_IMAGE = require('@/assets/images/CampusMapEng1stFloor.png');
++
++export default function NavigateScreen() {
++  const { points, samples, selectedPointId } = useFingerprintStore();
++
++  const lastSample = samples[samples.length - 1];
++  const activePointId = lastSample?.pointId || selectedPointId;
++  const activePoint = useMemo(
++    () => points.find((point) => point.id === activePointId) ?? null,
++    [points, activePointId]
++  );
++
++  return (
++    <View style={styles.container}>
++      <View style={styles.mapCard}>
++        <FloorPlanView imageSource={FLOOR_PLAN_IMAGE} points={points} activePointId={activePointId} />
++      </View>
++      <ScrollView contentContainerStyle={styles.panel}>
++        <Text style={styles.title}>Navigation view</Text>
++        <Text style={styles.subtitle}>Shows the most recent fingerprint point as your position.</Text>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Current estimate</Text>
++          {activePoint ? (
++            <Text style={styles.value}>
++              {activePoint.label} · x={activePoint.xMeters}m y={activePoint.yMeters}m
++            </Text>
++          ) : (
++            <Text style={styles.value}>Capture a fingerprint sample to set a position.</Text>
++          )}
++          <Text style={styles.caption}>Last sample: {lastSample?.timestamp ?? 'none'}</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Points loaded</Text>
++          <Text style={styles.value}>{points.length} points on the floor plan.</Text>
++        </View>
++      </ScrollView>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    backgroundColor: '#F8FAFC',
++  },
++  mapCard: {
++    height: 300,
++    padding: 12,
++  },
++  panel: {
++    padding: 16,
++    gap: 16,
++  },
++  title: {
++    fontSize: 20,
++    fontWeight: '700',
++  },
++  subtitle: {
++    color: '#475569',
++  },
++  card: {
++    backgroundColor: '#FFFFFF',
++    borderRadius: 12,
++    padding: 16,
++    borderWidth: 1,
++    borderColor: '#E2E8F0',
++  },
++  label: {
++    fontSize: 12,
++    textTransform: 'uppercase',
++    letterSpacing: 0.6,
++    color: '#64748B',
++    marginBottom: 6,
++  },
++  value: {
++    color: '#0F172A',
++  },
++  caption: {
++    color: '#64748B',
++    fontSize: 12,
++    marginTop: 6,
++  },
++});
+diff --git a/frontend/app/(tabs)/points.tsx b/frontend/app/(tabs)/points.tsx
+new file mode 100644
+index 0000000..e3582ed
+--- /dev/null
++++ b/frontend/app/(tabs)/points.tsx
+@@ -0,0 +1,172 @@
++import React, { useMemo, useState } from 'react';
++import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
++
++import FloorPlanView from '@/components/floor-plan-view';
++import { createId, type FingerprintPoint, useFingerprintStore } from '@/context/fingerprint-store';
++
++const FLOOR_PLAN_IMAGE = require('@/assets/images/CampusMapEng1stFloor.png');
++
++export default function PointsScreen() {
++  const { addPoint, floorPlanId, pixelsPerMeter, points, selectedPointId, setSelectedPointId, removePoint } =
++    useFingerprintStore();
++  const [label, setLabel] = useState('P1');
++
++  const selectedPoint = useMemo(
++    () => points.find((point) => point.id === selectedPointId) ?? null,
++    [points, selectedPointId]
++  );
++
++  const handleMapPress = (imageX: number, imageY: number, imageWidth: number, imageHeight: number) => {
++    const nextLabel = label.trim() || `P${points.length + 1}`;
++    const xMeters = Number((imageX / pixelsPerMeter).toFixed(2));
++    const yMeters = Number(((imageHeight - imageY) / pixelsPerMeter).toFixed(2));
++    const point: FingerprintPoint = {
++      id: createId(),
++      label: nextLabel,
++      floorPlanId,
++      xPx: imageX,
++      yPx: imageY,
++      xMeters,
++      yMeters,
++    };
++    addPoint(point);
++    setLabel(`P${points.length + 2}`);
++  };
++
++  return (
++    <View style={styles.container}>
++      <View style={styles.mapCard}>
++        <FloorPlanView
++          imageSource={FLOOR_PLAN_IMAGE}
++          points={points}
++          activePointId={selectedPointId}
++          onPress={handleMapPress}
++        />
++      </View>
++
++      <ScrollView contentContainerStyle={styles.panel}>
++        <Text style={styles.title}>Point selection</Text>
++        <Text style={styles.subtitle}>Tap the floor plan to create labeled fingerprint points.</Text>
++
++        <View style={styles.row}>
++          <Text style={styles.label}>Next label</Text>
++          <TextInput
++            value={label}
++            onChangeText={setLabel}
++            placeholder="P1"
++            style={styles.input}
++          />
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>Active point</Text>
++          {selectedPoint ? (
++            <Text style={styles.value}>
++              {selectedPoint.label} → x={selectedPoint.xMeters}m, y={selectedPoint.yMeters}m
++            </Text>
++          ) : (
++            <Text style={styles.value}>No point selected yet.</Text>
++          )}
++          <Text style={styles.caption}>Pixels-per-meter scale: {pixelsPerMeter}</Text>
++        </View>
++
++        <View style={styles.card}>
++          <Text style={styles.label}>All points ({points.length})</Text>
++          {points.length === 0 ? (
++            <Text style={styles.value}>Tap the map to add the first point.</Text>
++          ) : (
++            points.map((point) => (
++              <View key={point.id} style={styles.pointRow}>
++                <TouchableOpacity
++                  style={styles.pointButton}
++                  onPress={() => setSelectedPointId(point.id)}
++                >
++                  <Text style={styles.pointText}>
++                    {point.label} · x={point.xMeters}m y={point.yMeters}m
++                  </Text>
++                </TouchableOpacity>
++                <TouchableOpacity onPress={() => removePoint(point.id)}>
++                  <Text style={styles.remove}>Remove</Text>
++                </TouchableOpacity>
++              </View>
++            ))
++          )}
++        </View>
++      </ScrollView>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    backgroundColor: '#F8FAFC',
++  },
++  mapCard: {
++    height: 300,
++    padding: 12,
++  },
++  panel: {
++    padding: 16,
++    gap: 16,
++  },
++  title: {
++    fontSize: 20,
++    fontWeight: '700',
++  },
++  subtitle: {
++    color: '#475569',
++  },
++  row: {
++    gap: 8,
++  },
++  label: {
++    fontSize: 12,
++    textTransform: 'uppercase',
++    letterSpacing: 0.6,
++    color: '#64748B',
++    marginBottom: 6,
++  },
++  input: {
++    backgroundColor: '#FFFFFF',
++    borderRadius: 8,
++    paddingHorizontal: 12,
++    paddingVertical: 10,
++    borderWidth: 1,
++    borderColor: '#E2E8F0',
++  },
++  card: {
++    backgroundColor: '#FFFFFF',
++    padding: 12,
++    borderRadius: 10,
++    borderWidth: 1,
++    borderColor: '#E2E8F0',
++  },
++  value: {
++    color: '#0F172A',
++  },
++  caption: {
++    marginTop: 6,
++    color: '#64748B',
++    fontSize: 12,
++  },
++  pointRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingVertical: 6,
++    borderBottomWidth: 1,
++    borderBottomColor: '#F1F5F9',
++  },
++  pointButton: {
++    flex: 1,
++    paddingRight: 8,
++  },
++  pointText: {
++    color: '#0F172A',
++  },
++  remove: {
++    color: '#B91C1C',
++    fontWeight: '600',
++  },
++});
+diff --git a/frontend/app/_layout.tsx b/frontend/app/_layout.tsx
+index f518c9b..58dea1b 100644
+--- a/frontend/app/_layout.tsx
++++ b/frontend/app/_layout.tsx
+@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
+ import { StatusBar } from 'expo-status-bar';
+ import 'react-native-reanimated';
+ 
++import { FingerprintStoreProvider } from '@/context/fingerprint-store';
+ import { useColorScheme } from '@/hooks/use-color-scheme';
+ 
+ export const unstable_settings = {
+@@ -14,11 +15,13 @@ export default function RootLayout() {
+ 
+   return (
+     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+-      <Stack>
+-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+-      </Stack>
+-      <StatusBar style="auto" />
++      <FingerprintStoreProvider>
++        <Stack>
++          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
++          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
++        </Stack>
++        <StatusBar style="auto" />
++      </FingerprintStoreProvider>
+     </ThemeProvider>
+   );
+ }
+diff --git a/frontend/components/floor-plan-view.tsx b/frontend/components/floor-plan-view.tsx
+new file mode 100644
+index 0000000..c0ea23e
+--- /dev/null
++++ b/frontend/components/floor-plan-view.tsx
+@@ -0,0 +1,123 @@
++import React, { useMemo, useState } from 'react';
++import {
++  GestureResponderEvent,
++  Image,
++  ImageSourcePropType,
++  LayoutChangeEvent,
++  Pressable,
++  StyleSheet,
++  View,
++} from 'react-native';
++import Svg, { Circle, Text as SvgText } from 'react-native-svg';
++
++import type { FingerprintPoint } from '@/context/fingerprint-store';
++
++type FloorPlanViewProps = {
++  imageSource: ImageSourcePropType;
++  points: FingerprintPoint[];
++  activePointId?: string | null;
++  onPress?: (imageX: number, imageY: number, imageWidth: number, imageHeight: number) => void;
++};
++
++type LayoutSize = { width: number; height: number };
++
++const DEFAULT_LAYOUT: LayoutSize = { width: 0, height: 0 };
++
++export default function FloorPlanView({ imageSource, points, activePointId, onPress }: FloorPlanViewProps) {
++  const [layout, setLayout] = useState(DEFAULT_LAYOUT);
++
++  const imageInfo = useMemo(() => {
++    const resolved = Image.resolveAssetSource(imageSource);
++    return { width: resolved.width, height: resolved.height };
++  }, [imageSource]);
++
++  const fit = useMemo(() => {
++    if (!layout.width || !layout.height) {
++      return { scale: 1, offsetX: 0, offsetY: 0, width: 0, height: 0 };
++    }
++    const scale = Math.min(layout.width / imageInfo.width, layout.height / imageInfo.height);
++    const width = imageInfo.width * scale;
++    const height = imageInfo.height * scale;
++    const offsetX = (layout.width - width) / 2;
++    const offsetY = (layout.height - height) / 2;
++    return { scale, offsetX, offsetY, width, height };
++  }, [imageInfo.height, imageInfo.width, layout.height, layout.width]);
++
++  const handleLayout = (event: LayoutChangeEvent) => {
++    setLayout({ width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height });
++  };
++
++  const handlePress = (event: GestureResponderEvent) => {
++    if (!onPress) {
++      return;
++    }
++    const { locationX, locationY } = event.nativeEvent;
++    const imageX = (locationX - fit.offsetX) / fit.scale;
++    const imageY = (locationY - fit.offsetY) / fit.scale;
++    const withinX = imageX >= 0 && imageX <= imageInfo.width;
++    const withinY = imageY >= 0 && imageY <= imageInfo.height;
++    if (!withinX || !withinY) {
++      return;
++    }
++    onPress(imageX, imageY, imageInfo.width, imageInfo.height);
++  };
++
++  return (
++    <View style={styles.container} onLayout={handleLayout}>
++      <Pressable style={styles.pressable} onPress={handlePress}>
++        <Image source={imageSource} resizeMode="contain" style={styles.image} />
++        {layout.width > 0 && (
++          <Svg width={layout.width} height={layout.height} style={styles.overlay}>
++            {points.map((point) => {
++              const displayX = fit.offsetX + point.xPx * fit.scale;
++              const displayY = fit.offsetY + point.yPx * fit.scale;
++              const isActive = point.id === activePointId;
++              return (
++                <React.Fragment key={point.id}>
++                  <Circle
++                    cx={displayX}
++                    cy={displayY}
++                    r={isActive ? 10 : 7}
++                    fill={isActive ? '#1D4ED8' : '#10B981'}
++                    stroke="#0F172A"
++                    strokeWidth={isActive ? 2 : 1}
++                  />
++                  <SvgText
++                    x={displayX + 10}
++                    y={displayY - 10}
++                    fill="#111827"
++                    fontSize={12}
++                    fontWeight="600"
++                  >
++                    {point.label}
++                  </SvgText>
++                </React.Fragment>
++              );
++            })}
++          </Svg>
++        )}
++      </Pressable>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    borderRadius: 12,
++    overflow: 'hidden',
++    backgroundColor: '#F3F4F6',
++  },
++  pressable: {
++    flex: 1,
++  },
++  image: {
++    width: '100%',
++    height: '100%',
++  },
++  overlay: {
++    position: 'absolute',
++    left: 0,
++    top: 0,
++  },
++});
+diff --git a/frontend/components/ui/icon-symbol.tsx b/frontend/components/ui/icon-symbol.tsx
+index 7050302..16676a7 100644
+--- a/frontend/components/ui/icon-symbol.tsx
++++ b/frontend/components/ui/icon-symbol.tsx
+@@ -16,6 +16,9 @@ type IconSymbolName = keyof typeof MAPPING;
+ const MAPPING = {
+   'house.fill': 'home',
+   'paperplane.fill': 'send',
++  'mappin.and.ellipse': 'place',
++  'antenna.radiowaves.left.and.right': 'bluetooth-searching',
++  'location.north.fill': 'navigation',
+   'lock.fill': 'lock',
+   'chevron.left.forwardslash.chevron.right': 'code',
+   'chevron.right': 'chevron-right',
+diff --git a/frontend/context/fingerprint-store.tsx b/frontend/context/fingerprint-store.tsx
+new file mode 100644
+index 0000000..c31c1e4
+--- /dev/null
++++ b/frontend/context/fingerprint-store.tsx
+@@ -0,0 +1,128 @@
++import Constants from 'expo-constants';
++import React, { createContext, useContext, useMemo, useState } from 'react';
++import { Platform } from 'react-native';
++
++type FingerprintPoint = {
++  id: string;
++  label: string;
++  floorPlanId: string;
++  xPx: number;
++  yPx: number;
++  xMeters: number;
++  yMeters: number;
++};
++
++type FingerprintReading = {
++  deviceId: string;
++  rssi: number;
++};
++
++type FingerprintSample = {
++  id: string;
++  timestamp: string;
++  sessionId: string;
++  floorPlanId: string;
++  pointId: string;
++  xMeters: number;
++  yMeters: number;
++  deviceModel: string;
++  osVersion: string;
++  appVersion: string;
++  mode: string;
++  readings: FingerprintReading[];
++};
++
++type FingerprintStore = {
++  floorPlanId: string;
++  pixelsPerMeter: number;
++  sessionId: string;
++  points: FingerprintPoint[];
++  selectedPointId: string | null;
++  samples: FingerprintSample[];
++  setSelectedPointId: (id: string | null) => void;
++  addPoint: (point: FingerprintPoint) => void;
++  removePoint: (id: string) => void;
++  addSample: (sample: FingerprintSample) => void;
++  clearSamples: () => void;
++  importSamples: (samples: FingerprintSample[]) => void;
++  setSessionId: (sessionId: string) => void;
++};
++
++const DEFAULT_FLOOR_PLAN_ID = 'eng-1f';
++const DEFAULT_PIXELS_PER_METER = 8;
++
++const FingerprintStoreContext = createContext<FingerprintStore | null>(null);
++
++const createId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
++
++export const getDeviceInfo = () => {
++  const deviceModel =
++    Constants.deviceName || Constants.expoConfig?.name || Constants.deviceYearClass?.toString() || 'unknown';
++  const appVersion = Constants.expoConfig?.version || 'unknown';
++  return {
++    deviceModel,
++    osVersion: `${Platform.OS} ${Platform.Version}`,
++    appVersion,
++  };
++};
++
++export function FingerprintStoreProvider({ children }: { children: React.ReactNode }) {
++  const [points, setPoints] = useState<FingerprintPoint[]>([]);
++  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
++  const [samples, setSamples] = useState<FingerprintSample[]>([]);
++  const [sessionId, setSessionId] = useState(() => `session-${Date.now()}`);
++
++  const addPoint = (point: FingerprintPoint) => {
++    setPoints((current) => [...current, point]);
++    setSelectedPointId(point.id);
++  };
++
++  const removePoint = (id: string) => {
++    setPoints((current) => current.filter((point) => point.id !== id));
++    setSelectedPointId((current) => (current === id ? null : current));
++  };
++
++  const addSample = (sample: FingerprintSample) => {
++    setSamples((current) => [...current, sample]);
++  };
++
++  const clearSamples = () => {
++    setSamples([]);
++  };
++
++  const importSamples = (imported: FingerprintSample[]) => {
++    setSamples((current) => [...current, ...imported]);
++  };
++
++  const store = useMemo(
++    () => ({
++      floorPlanId: DEFAULT_FLOOR_PLAN_ID,
++      pixelsPerMeter: DEFAULT_PIXELS_PER_METER,
++      sessionId,
++      points,
++      selectedPointId,
++      samples,
++      setSelectedPointId,
++      addPoint,
++      removePoint,
++      addSample,
++      clearSamples,
++      importSamples,
++      setSessionId,
++    }),
++    [points, selectedPointId, samples, sessionId]
++  );
++
++  return <FingerprintStoreContext.Provider value={store}>{children}</FingerprintStoreContext.Provider>;
++}
++
++export const useFingerprintStore = () => {
++  const context = useContext(FingerprintStoreContext);
++  if (!context) {
++    throw new Error('useFingerprintStore must be used within FingerprintStoreProvider');
++  }
++  return context;
++};
++
++export type { FingerprintPoint, FingerprintReading, FingerprintSample };
++export { createId };
+diff --git a/frontend/hooks/use-ble-scanner.ts b/frontend/hooks/use-ble-scanner.ts
+new file mode 100644
+index 0000000..d91bc72
+--- /dev/null
++++ b/frontend/hooks/use-ble-scanner.ts
+@@ -0,0 +1,83 @@
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
++import { BleManager, type Device } from 'react-native-ble-plx';
++
++export type BleDeviceReading = {
++  id: string;
++  name: string | null;
++  rssi: number;
++  lastSeen: number;
++};
++
++type BleScannerOptions = {
++  onDeviceSeen?: (device: BleDeviceReading) => void;
++};
++
++export const useBleScanner = (options: BleScannerOptions = {}) => {
++  const manager = useMemo(() => new BleManager(), []);
++  const [isScanning, setIsScanning] = useState(false);
++  const [devices, setDevices] = useState<Record<string, BleDeviceReading>>({});
++  const optionsRef = useRef(options);
++  optionsRef.current = options;
++
++  useEffect(() => {
++    return () => {
++      manager.destroy();
++    };
++  }, [manager]);
++
++  const handleDevice = useCallback(
++    (device: Device) => {
++      if (device.rssi == null) {
++        return;
++      }
++      const reading: BleDeviceReading = {
++        id: device.id,
++        name: device.name ?? device.localName ?? null,
++        rssi: device.rssi,
++        lastSeen: Date.now(),
++      };
++      setDevices((current) => ({
++        ...current,
++        [device.id]: reading,
++      }));
++      optionsRef.current.onDeviceSeen?.(reading);
++    },
++    []
++  );
++
++  const startScan = useCallback(() => {
++    if (isScanning) {
++      return;
++    }
++    setIsScanning(true);
++    manager.startDeviceScan(null, { allowDuplicates: true }, (error, device) => {
++      if (error) {
++        setIsScanning(false);
++        return;
++      }
++      if (device) {
++        handleDevice(device);
++      }
++    });
++  }, [handleDevice, isScanning, manager]);
++
++  const stopScan = useCallback(() => {
++    if (!isScanning) {
++      return;
++    }
++    manager.stopDeviceScan();
++    setIsScanning(false);
++  }, [isScanning, manager]);
++
++  const resetDevices = useCallback(() => {
++    setDevices({});
++  }, []);
++
++  return {
++    devices,
++    isScanning,
++    startScan,
++    stopScan,
++    resetDevices,
++  };
++};
+diff --git a/frontend/package-lock.json b/frontend/package-lock.json
+index 2c8c5b1..30c712d 100644
+--- a/frontend/package-lock.json
++++ b/frontend/package-lock.json
+@@ -14,9 +14,11 @@
+         "@react-navigation/native": "^7.1.8",
+         "expo": "~54.0.13",
+         "expo-constants": "~18.0.9",
++        "expo-document-picker": "~13.0.6",
+         "expo-font": "~14.0.9",
+         "expo-haptics": "~15.0.7",
+         "expo-image": "~3.0.9",
++        "expo-file-system": "~18.0.9",
+         "expo-linking": "~8.0.8",
+         "expo-router": "~6.0.11",
+         "expo-splash-screen": "~31.0.10",
+@@ -27,6 +29,7 @@
+         "react": "19.1.0",
+         "react-dom": "19.1.0",
+         "react-native": "0.81.4",
++        "react-native-ble-plx": "^3.4.0",
+         "react-native-gesture-handler": "~2.28.0",
+         "react-native-image-pan-zoom": "^2.1.12",
+         "react-native-reanimated": "~4.1.1",
+diff --git a/frontend/package.json b/frontend/package.json
+index 38029cf..0d95528 100644
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -17,6 +17,8 @@
+     "@react-navigation/native": "^7.1.8",
+     "expo": "~54.0.13",
+     "expo-constants": "~18.0.9",
++    "expo-document-picker": "~13.0.6",
++    "expo-file-system": "~18.0.9",
+     "expo-font": "~14.0.9",
+     "expo-haptics": "~15.0.7",
+     "expo-image": "~3.0.9",
+@@ -30,6 +32,7 @@
+     "react": "19.1.0",
+     "react-dom": "19.1.0",
+     "react-native": "0.81.4",
++    "react-native-ble-plx": "^3.4.0",
+     "react-native-gesture-handler": "~2.28.0",
+     "react-native-image-pan-zoom": "^2.1.12",
+     "react-native-reanimated": "~4.1.1",
+-- 
+2.43.0
