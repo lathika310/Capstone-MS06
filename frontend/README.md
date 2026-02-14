@@ -1,50 +1,68 @@
-# Welcome to your Expo app 👋
+# Campus Navigation Fingerprint Collector (Expo + React Native)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This app implements Android fingerprint collection + floorplan point editing + live kNN regression for:
+- `ENG4_NORTH`
+- `ENG4_SOUTH`
 
-## Get started
+## Why development build is required
+BLE iBeacon scanning (`react-native-ble-plx`) does **not** work in Expo Go. Use a dev client.
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
+## Setup
 ```bash
-npm run reset-project
+npm install
+npx expo prebuild
+npx expo run:android
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+For EAS dev build:
+```bash
+eas build -p android --profile development
+```
 
-## Learn more
+## Permissions (Android)
+Configured in `app.json`:
+- `ACCESS_FINE_LOCATION`
+- `BLUETOOTH_SCAN`
+- `BLUETOOTH_CONNECT`
 
-To learn more about developing your project with Expo, look at the following resources:
+Use the **Perm** button in Collect/Live screens to request runtime permissions.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Tabs
+- **Collect**
+  - Select plan + anchor point
+  - Start/stop ranging
+  - Capture window (2..30s), median RSSI per beacon
+  - Save Medians / Save Live
+  - Export CSV / Import CSV
+- **Live**
+  - Plan selection
+  - UUID filter
+  - Start/stop live regression
+  - Blue dot + confidence
+- **Plans**
+  - Tap map to add anchor points
+  - Rename/delete/clear points
+  - Pinch + pan map
+  - Select point and use “Move Selected Point” then tap map to reposition
 
-## Join the community
+## CSV schema
+Header:
+```csv
+timestamp,planID,pointID,pointName,xNorm,yNorm,uuid,major,minor,rssi,mode
+```
 
-Join our community of developers creating universal apps.
+Import behavior:
+- Group each fingerprint sample by `(timestamp, planID, xNorm, yNorm)`
+- For duplicate beacon rows in a sample, median RSSI is used
+- Build global sorted beacon list from `major_minor`
+- Fill missing features with `RSSI_FLOOR=-100`
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Regression
+- Plan-filtered training cache
+- Feature normalization by training mean/std (`+1e-6`)
+- Euclidean distance
+- `k=5`
+- Weighted average with `w=1/(d+1e-3)`
+- Clamp output to `[0,1]`
+- EMA smoothing `alpha=0.35`
+- Confidence: `1/(1+avgNeighborDistance)`
