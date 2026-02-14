@@ -1,5 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Share } from 'react-native';
 
 import { RSSI_FLOOR, type FingerprintCsvRow, type PlanID, type TrainingDataset } from '@/types/fingerprint';
@@ -16,19 +16,21 @@ const median = (values: number[]) => {
 export const rowsToCsv = (rows: FingerprintCsvRow[]) => {
   const lines = [HEADER];
   rows.forEach((r) => {
-    lines.push([
-      r.timestamp,
-      r.planID,
-      r.pointID,
-      r.pointName,
-      r.xNorm.toFixed(6),
-      r.yNorm.toFixed(6),
-      r.uuid,
-      r.major,
-      r.minor,
-      r.rssi,
-      r.mode,
-    ].join(','));
+    lines.push(
+      [
+        r.timestamp,
+        r.planID,
+        r.pointID,
+        r.pointName,
+        r.xNorm.toFixed(6),
+        r.yNorm.toFixed(6),
+        r.uuid,
+        r.major,
+        r.minor,
+        r.rssi,
+        r.mode,
+      ].join(',')
+    );
   });
   return lines.join('\n');
 };
@@ -36,37 +38,47 @@ export const rowsToCsv = (rows: FingerprintCsvRow[]) => {
 export const exportRowsCsv = async (rows: FingerprintCsvRow[]) => {
   if (!FileSystem.cacheDirectory) throw new Error('No cache directory.');
   const uri = `${FileSystem.cacheDirectory}fingerprints-${Date.now()}.csv`;
-  await FileSystem.writeAsStringAsync(uri, rowsToCsv(rows), { encoding: FileSystem.EncodingType.UTF8 });
+  await FileSystem.writeAsStringAsync(uri, rowsToCsv(rows));
   await Share.share({ url: uri, message: uri });
 };
 
 export const importCsvText = async () => {
-  const result = await DocumentPicker.getDocumentAsync({ type: 'text/*', copyToCacheDirectory: true });
+  const result = await DocumentPicker.getDocumentAsync({
+    type: ['text/csv', 'text/plain', 'text/*'],
+    copyToCacheDirectory: true,
+  });
   if (result.canceled || result.assets.length === 0) return null;
-  return FileSystem.readAsStringAsync(result.assets[0].uri, { encoding: FileSystem.EncodingType.UTF8 });
+  return FileSystem.readAsStringAsync(result.assets[0].uri);
 };
 
 const parseLine = (line: string) => line.split(',').map((v) => v.trim());
 
 export const parseCsvRows = (content: string): FingerprintCsvRow[] => {
-  const lines = content.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = content
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
   if (lines.length < 2) return [];
-  return lines.slice(1).map((line) => {
-    const [timestamp, planID, pointID, pointName, xNorm, yNorm, uuid, major, minor, rssi, mode] = parseLine(line);
-    return {
-      timestamp,
-      planID: planID as PlanID,
-      pointID,
-      pointName,
-      xNorm: Number(xNorm),
-      yNorm: Number(yNorm),
-      uuid,
-      major: Number(major),
-      minor: Number(minor),
-      rssi: Number(rssi),
-      mode,
-    };
-  }).filter((r) => Number.isFinite(r.xNorm) && Number.isFinite(r.yNorm) && Number.isFinite(r.rssi));
+  return lines
+    .slice(1)
+    .map((line) => {
+      const [timestamp, planID, pointID, pointName, xNorm, yNorm, uuid, major, minor, rssi, mode] =
+        parseLine(line);
+      return {
+        timestamp,
+        planID: planID as PlanID,
+        pointID,
+        pointName,
+        xNorm: Number(xNorm),
+        yNorm: Number(yNorm),
+        uuid,
+        major: Number(major),
+        minor: Number(minor),
+        rssi: Number(rssi),
+        mode,
+      };
+    })
+    .filter((r) => Number.isFinite(r.xNorm) && Number.isFinite(r.yNorm) && Number.isFinite(r.rssi));
 };
 
 export const buildDataset = (rows: FingerprintCsvRow[]): TrainingDataset => {
@@ -94,7 +106,13 @@ export const buildDataset = (rows: FingerprintCsvRow[]): TrainingDataset => {
       return values?.length ? median(values) : RSSI_FLOOR;
     });
 
-    return { timestamp: first.timestamp, planID: first.planID, xNorm: first.xNorm, yNorm: first.yNorm, vector };
+    return {
+      timestamp: first.timestamp,
+      planID: first.planID,
+      xNorm: first.xNorm,
+      yNorm: first.yNorm,
+      vector,
+    };
   });
 
   return { beaconKeys, samples, rows };

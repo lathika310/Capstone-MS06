@@ -66,3 +66,15 @@ Import behavior:
 - Clamp output to `[0,1]`
 - EMA smoothing `alpha=0.35`
 - Confidence: `1/(1+avgNeighborDistance)`
+
+
+## Troubleshooting
+- If you see `No matching version found for expo-document-picker@~13.0.6`, install using Expo-managed versions:
+  ```bash
+  npx expo install expo-document-picker expo-file-system react-native-gesture-handler
+  ```
+- After dependency changes, rebuild native app:
+  ```bash
+  npx expo prebuild --clean
+  npx expo run:android
+  ```
