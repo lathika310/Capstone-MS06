@@ -1,6 +1,6 @@
 import { ImageSourcePropType } from 'react-native';
 
-export type PlanID = 'ENG4_NORTH' | 'ENG4_SOUTH';
+export type PlanID = 'ENG4_NORTH' | 'ENG4_SOUTH' | 'HOME_FLOOR';
 
 export type FloorPlanDefinition = {
   id: PlanID;
@@ -56,9 +56,12 @@ export type TrainingDataset = {
   rows: FingerprintCsvRow[];
 };
 
+export const BEACON_UUID_DEFAULT = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
+
 export const FLOOR_PLANS: FloorPlanDefinition[] = [
   { id: 'ENG4_NORTH', title: 'ENG4 North', image: require('@/assets/images/eng4_north.png') },
   { id: 'ENG4_SOUTH', title: 'ENG4 South', image: require('@/assets/images/eng4_south.png') },
+  { id: 'HOME_FLOOR', title: 'Home Floor', image: require('@/assets/images/homeFloorPlan.png') },
 ];
 
 export const RSSI_FLOOR = -100;

@@ -5,7 +5,7 @@ import { buildDataset, exportRowsCsv, importCsvText, parseCsvRows } from '@/lib/
 import { requestBlePermissions } from '@/lib/permissions';
 import { useBeaconRanger } from '@/hooks/use-beacon-ranger';
 import { useAppStore } from '@/store/app-store';
-import type { FingerprintCsvRow } from '@/types/fingerprint';
+import { BEACON_UUID_DEFAULT, type FingerprintCsvRow } from '@/types/fingerprint';
 
 const median = (values: number[]) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -16,7 +16,7 @@ const median = (values: number[]) => {
 export default function CollectScreen() {
   const { plans, selectedPlanID, setSelectedPlanID, points, dataset, appendRows, replaceRows, clearDataset } = useAppStore();
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
-  const [uuid, setUuid] = useState('');
+  const [uuid, setUuid] = useState(BEACON_UUID_DEFAULT);
   const [captureWindow, setCaptureWindow] = useState('8');
   const [isCapturing, setIsCapturing] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
@@ -105,10 +105,12 @@ export default function CollectScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Collect</Text>
       <View style={styles.row}>{plans.map((p) => <TouchableOpacity key={p.id} style={[styles.chip, p.id === selectedPlanID && styles.chipActive]} onPress={() => setSelectedPlanID(p.id)}><Text>{p.title}</Text></TouchableOpacity>)}</View>
-      <TextInput style={styles.input} value={uuid} onChangeText={setUuid} placeholder="UUID filter (optional)" autoCapitalize="none" />
+      <TextInput style={styles.input} value={uuid} onChangeText={setUuid} placeholder="Beacon UUID" autoCapitalize="none" />
       <View style={styles.row}>{planPoints.map((p) => <TouchableOpacity key={p.id} style={[styles.chip, p.id === selectedPointId && styles.chipActive]} onPress={() => setSelectedPointId(p.id)}><Text>{p.name}</Text></TouchableOpacity>)}</View>
       <Text>{point ? `Selected: (${point.xNorm.toFixed(3)}, ${point.yNorm.toFixed(3)})` : 'No point selected'}</Text>
 
+
+      <Text style={{ color: '#475569' }}>Perm requests Android BLE/location runtime permissions (Scan/Connect/Fine Location).</Text>
       <View style={styles.row}><TouchableOpacity style={styles.btn} onPress={requestBlePermissions}><Text style={styles.btnText}>Perm</Text></TouchableOpacity><TouchableOpacity style={styles.btn} onPress={start} disabled={isScanning}><Text style={styles.btnText}>Start ranging</Text></TouchableOpacity><TouchableOpacity style={styles.btnOutline} onPress={stop}><Text>Stop</Text></TouchableOpacity><TouchableOpacity style={styles.btnOutline} onPress={clear}><Text>Clear live</Text></TouchableOpacity></View>
 
       <View style={styles.row}><TextInput style={[styles.input, { width: 80 }]} value={captureWindow} onChangeText={setCaptureWindow} keyboardType="numeric" /><TouchableOpacity style={styles.btn} onPress={beginCapture} disabled={isCapturing}><Text style={styles.btnText}>{isCapturing ? `${secondsLeft}s` : 'Capture'}</Text></TouchableOpacity><TouchableOpacity style={styles.btnOutline} onPress={stopCapture}><Text>Stop Capture</Text></TouchableOpacity><TouchableOpacity style={styles.btn} onPress={saveMedians}><Text style={styles.btnText}>Save Medians</Text></TouchableOpacity><TouchableOpacity style={styles.btnOutline} onPress={captureSnapshot}><Text>Save Live</Text></TouchableOpacity></View>
