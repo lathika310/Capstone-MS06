@@ -6,14 +6,6 @@ struct BeaconID: Hashable {
     let minor: Int
 }
 
-func median(_ values: [Int]) -> Int? {
-    guard !values.isEmpty else { return nil }
-    let s = values.sorted()
-    let m = s.count / 2
-    if s.count % 2 == 0 { return Int(Double(s[m-1] + s[m]) / 2.0) }
-    return s[m]
-}
-
 final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var uuid: UUID?
@@ -29,7 +21,6 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
     @Published var secondsLeft = 0
     @Published var windowMedians: [BeaconID: Int] = [:]
 
-    // Exposed capture stats for UI
     @Published private(set) var captureSampleCounts: [BeaconID: Int] = [:]
     @Published private(set) var discarded: Set<BeaconID> = []
 
@@ -43,7 +34,6 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
         super.init()
         manager.delegate = self
 
-        // Prune offline beacons once per second
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.pruneOfflineBeacons()
         }
@@ -69,7 +59,6 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
         live = [:]
         lastSeen = [:]
 
-        // Clear capture state
         isCapturing = false
         secondsLeft = 0
         windowMedians = [:]
@@ -145,19 +134,24 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
         windowMedians = meds
     }
 
+    private func median(_ values: [Int]) -> Int? {
+        guard !values.isEmpty else { return nil }
+        let s = values.sorted()
+        let m = s.count / 2
+        if s.count % 2 == 0 { return Int(Double(s[m-1] + s[m]) / 2.0) }
+        return s[m]
+    }
+
     // MARK: - Offline handling
 
     private func pruneOfflineBeacons() {
         let now = Date()
-        var removedAny = false
 
         for (id, seenTime) in lastSeen {
             if now.timeIntervalSince(seenTime) > offlineTimeout {
                 lastSeen.removeValue(forKey: id)
                 live.removeValue(forKey: id)
-                removedAny = true
 
-                // If capturing: DISCARD ENTIRELY
                 if isCapturing {
                     discarded.insert(id)
                     windowSamples.removeValue(forKey: id)
@@ -166,13 +160,9 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
             }
         }
 
-        if removedAny, uuid != nil, live.isEmpty, status.hasPrefix("Ranging") {
+        if uuid != nil, live.isEmpty, status.hasPrefix("Ranging") {
             status = "Ranging... (no beacons)"
         }
-    }
-
-    func isBeaconDiscarded(_ id: BeaconID) -> Bool {
-        discarded.contains(id)
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -194,7 +184,7 @@ final class BeaconRanger: NSObject, ObservableObject, CLLocationManagerDelegate 
             }
         }
 
-        if uuid != nil && status.hasPrefix("Ranging") && !beacons.isEmpty {
+        if uuid != nil && !beacons.isEmpty {
             status = "Ranging..."
         }
     }
