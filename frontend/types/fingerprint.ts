@@ -57,8 +57,8 @@ export type TrainingDataset = {
 };
 
 export const FLOOR_PLANS: FloorPlanDefinition[] = [
-  { id: 'ENG4_NORTH', title: 'ENG4 North', image: require('@/assets/images/CampusMapEng1stFloor.png') },
-  { id: 'ENG4_SOUTH', title: 'ENG4 South', image: require('@/assets/images/CampusMapEng1stFloor.png') },
+  { id: 'ENG4_NORTH', title: 'ENG4 North', image: require('@/assets/images/eng4_north.png') },
+  { id: 'ENG4_SOUTH', title: 'ENG4 South', image: require('@/assets/images/eng4_south.png') },
 ];
 
 export const RSSI_FLOOR = -100;
