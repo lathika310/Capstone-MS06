@@ -16,13 +16,11 @@ final class SensorLogger: ObservableObject {
         status = "Barometer: running"
         altimeter.startRelativeAltitudeUpdates(to: .main) { [weak self] data, error in
             guard let self else { return }
-            if let error {
+            if error != nil {
                 self.status = "Barometer error"
-                print(error)
                 return
             }
             if let data {
-                // pressure reported in kPa
                 self.pressureKPa = data.pressure.doubleValue
             }
         }
