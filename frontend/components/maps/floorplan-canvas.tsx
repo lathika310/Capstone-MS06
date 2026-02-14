@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native';
+import { Image, LayoutChangeEvent, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
@@ -60,21 +60,26 @@ export function FloorplanCanvas({ imageSource, points, selectedPointId, liveDot,
     return { xNorm: clamp(localX / baseW), yNorm: clamp(localY / baseH) };
   };
 
+  const tap = Gesture.Tap()
+    .runOnJS(true)
+    .onEnd((e, success) => {
+      if (!success || !onAddPoint) return;
+      const p = toNorm(e.x, e.y);
+      onAddPoint(p.xNorm, p.yNorm);
+    });
+
   const onLayout = (e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
 
   return (
     <View style={styles.root} onLayout={onLayout}>
-      <GestureDetector gesture={Gesture.Simultaneous(pan, pinch)}>
+      <GestureDetector gesture={Gesture.Simultaneous(pan, pinch, tap)}>
         <Animated.View style={styles.fill}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={(e) => {
-              if (!onAddPoint) return;
-              const p = toNorm(e.nativeEvent.locationX, e.nativeEvent.locationY);
-              onAddPoint(p.xNorm, p.yNorm);
-            }}
-          />
-          <Animated.View style={[styles.mapLayer, { width: baseW, height: baseH, marginLeft: -baseW / 2, marginTop: -baseH / 2 }, mapStyle]}>
+          <Animated.View
+            style={[
+              styles.mapLayer,
+              { width: baseW, height: baseH, marginLeft: -baseW / 2, marginTop: -baseH / 2 },
+              mapStyle,
+            ]}>
             <Image source={imageSource} style={{ width: baseW, height: baseH }} resizeMode="contain" />
             {points.map((p) => (
               <View key={p.id} style={[styles.markerSlot, { left: p.xNorm * baseW - 9, top: p.yNorm * baseH - 9 }]}>
@@ -98,7 +103,21 @@ const styles = StyleSheet.create({
   fill: { ...StyleSheet.absoluteFillObject },
   mapLayer: { position: 'absolute', left: '50%', top: '50%' },
   markerSlot: { position: 'absolute' },
-  marker: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#fff' },
+  marker: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   markerSelected: { backgroundColor: '#16a34a' },
-  liveDot: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#2563eb', borderWidth: 2, borderColor: '#bfdbfe' },
+  liveDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#2563eb',
+    borderWidth: 2,
+    borderColor: '#bfdbfe',
+  },
 });
