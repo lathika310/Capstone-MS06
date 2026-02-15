@@ -1,65 +1,37 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router';
 import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="points"
-        options={{
-          title: 'Points',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="mappin.and.ellipse" color={color} />,
-        }}
-      />
+    <Tabs initialRouteName="collect" screenOptions={{ headerShown: false }}>
       <Tabs.Screen
         name="collect"
         options={{
           title: 'Collect',
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="antenna.radiowaves.left.and.right" color={color} />
-          ),
+          tabBarIcon: ({ color, size }) => <Ionicons name="radio-outline" size={size ?? 24} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="navigate"
+        name="live"
         options={{
-          title: 'Navigate',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="location.north.fill" color={color} />,
+          title: 'Live',
+          tabBarIcon: ({ color, size }) => <Ionicons name="navigate-circle-outline" size={size ?? 24} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="permissions"
+        name="plans"
         options={{
-          title: 'Permissions',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="lock.fill" color={color} />,
+          title: 'Plans',
+          tabBarIcon: ({ color, size }) => <Ionicons name="map-outline" size={size ?? 24} color={color} />,
         }}
       />
+      <Tabs.Screen name="index" options={{ href: null }} />
+      <Tabs.Screen name="explore" options={{ href: null }} />
+      <Tabs.Screen name="points" options={{ href: null }} />
+      <Tabs.Screen name="navigate" options={{ href: null }} />
+      <Tabs.Screen name="permissions" options={{ href: null }} />
+      <Tabs.Screen name="campusmap" options={{ href: null }} />
     </Tabs>
   );
 }
