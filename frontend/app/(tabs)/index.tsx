@@ -1,5 +1,5 @@
-import CampusMap from "./campusmap";
+import { Redirect } from 'expo-router';
 
-export default function Tabs() {
-  return <CampusMap />; // or include it in your tab/stack navigator
+export default function IndexScreen() {
+  return <Redirect href="/(tabs)/collect" />;
 }
