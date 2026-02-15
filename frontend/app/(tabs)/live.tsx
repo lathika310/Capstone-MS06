@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { FloorplanCanvas } from '@/components/maps/floorplan-canvas';
+import { useBeaconRanger } from '@/hooks/use-beacon-ranger';
 import { buildKnnCache, regressKnn } from '@/lib/knn';
 import { requestBlePermissions } from '@/lib/permissions';
-import { useBeaconRanger } from '@/hooks/use-beacon-ranger';
 import { useAppStore } from '@/store/app-store';
 import { BEACON_UUID_DEFAULT } from '@/types/fingerprint';
 
@@ -13,6 +13,8 @@ export default function LiveScreen() {
   const [uuid, setUuid] = useState(BEACON_UUID_DEFAULT);
   const [running, setRunning] = useState(false);
   const [pred, setPred] = useState<{ x: number; y: number; confidence: number } | null>(null);
+  const prevRef = useRef<{ x: number; y: number } | null>(null);
+
   const selectedPlan = plans.find((p) => p.id === selectedPlanID)!;
   const planPoints = points.filter((p) => p.planID === selectedPlanID);
   const { beacons, start, stop } = useBeaconRanger(uuid);
@@ -20,20 +22,67 @@ export default function LiveScreen() {
 
   useEffect(() => {
     if (!running || !cache) return;
-    const next = regressKnn(cache, beacons, pred ? { x: pred.x, y: pred.y } : null, 5, 0.35);
-    if (next) setPred(next);
-  }, [beacons, cache, pred, running]);
+    const next = regressKnn(cache, beacons, prevRef.current, 5, 0.2);
+    if (!next) return;
+    prevRef.current = { x: next.x, y: next.y };
+    setPred(next);
+  }, [beacons, cache, running]);
+
+  const handleStart = () => {
+    prevRef.current = null;
+    setPred(null);
+    start();
+    setRunning(true);
+  };
+
+  const handleStop = () => {
+    stop();
+    setRunning(false);
+    setPred(null);
+    prevRef.current = null;
+  };
 
   return (
     <View style={styles.container}>
-      <View style={styles.mapWrap}><FloorplanCanvas imageSource={selectedPlan.image} points={planPoints} liveDot={pred ? { xNorm: pred.x, yNorm: pred.y } : null} /></View>
+      <View style={styles.mapWrap}>
+        <FloorplanCanvas
+          imageSource={selectedPlan.image}
+          points={planPoints}
+          liveDot={pred ? { xNorm: pred.x, yNorm: pred.y } : null}
+        />
+      </View>
       <View style={styles.panel}>
-        <View style={styles.row}>{plans.map((p) => <TouchableOpacity key={p.id} style={[styles.chip, p.id === selectedPlanID && styles.chipActive]} onPress={() => setSelectedPlanID(p.id)}><Text>{p.title}</Text></TouchableOpacity>)}</View>
+        <View style={styles.row}>
+          {plans.map((p) => (
+            <TouchableOpacity
+              key={p.id}
+              style={[styles.chip, p.id === selectedPlanID && styles.chipActive]}
+              onPress={() => setSelectedPlanID(p.id)}>
+              <Text>{p.title}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
         <TextInput style={styles.input} value={uuid} onChangeText={setUuid} placeholder="Beacon UUID" />
 
-        <Text style={{ color: '#475569' }}>Perm requests Android BLE/location runtime permissions (Scan/Connect/Fine Location).</Text>
-        <View style={styles.row}><TouchableOpacity style={styles.btn} onPress={requestBlePermissions}><Text style={styles.btnText}>Perm</Text></TouchableOpacity><TouchableOpacity style={styles.btn} onPress={() => { start(); setRunning(true); }}><Text style={styles.btnText}>Start</Text></TouchableOpacity><TouchableOpacity style={styles.btnOutline} onPress={() => { stop(); setRunning(false); setPred(null); }}><Text>Stop</Text></TouchableOpacity></View>
-        <Text>{pred ? `x=${pred.x.toFixed(3)} y=${pred.y.toFixed(3)} confidence=${(pred.confidence * 100).toFixed(1)}%` : 'No prediction yet'}</Text>
+        <Text style={{ color: '#475569' }}>
+          Perm requests Android BLE/location runtime permissions (Scan/Connect/Fine Location).
+        </Text>
+        <View style={styles.row}>
+          <TouchableOpacity style={styles.btn} onPress={requestBlePermissions}>
+            <Text style={styles.btnText}>Perm</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btn} onPress={handleStart}>
+            <Text style={styles.btnText}>Start</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.btnOutline} onPress={handleStop}>
+            <Text>Stop</Text>
+          </TouchableOpacity>
+        </View>
+        <Text>
+          {pred
+            ? `x=${pred.x.toFixed(3)} y=${pred.y.toFixed(3)} confidence=${(pred.confidence * 100).toFixed(1)}%`
+            : 'No prediction yet'}
+        </Text>
         <Text>Plan training samples: {dataset.samples.filter((s) => s.planID === selectedPlanID).length}</Text>
       </View>
     </View>

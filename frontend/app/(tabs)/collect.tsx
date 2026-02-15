@@ -17,7 +17,7 @@ export default function CollectScreen() {
   const { plans, selectedPlanID, setSelectedPlanID, points, dataset, appendRows, replaceRows, clearDataset } = useAppStore();
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [uuid, setUuid] = useState(BEACON_UUID_DEFAULT);
-  const [captureWindow, setCaptureWindow] = useState('8');
+  const [captureWindow, setCaptureWindow] = useState('3');
   const [isCapturing, setIsCapturing] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [medians, setMedians] = useState<Record<string, number>>({});
